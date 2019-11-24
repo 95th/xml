@@ -1,13 +1,19 @@
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Element {
-    name: String,
-    attrs: Vec<(String, String)>,
-    children: Vec<Element>,
+pub enum Node {
+    Node(ElementNode),
+    Text(String),
 }
 
-impl FromStr for Element {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ElementNode {
+    name: String,
+    attrs: Vec<(String, String)>,
+    children: Vec<Node>,
+}
+
+impl FromStr for Node {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -84,30 +90,39 @@ where
     }
 }
 
-fn element<'a>() -> impl Parser<'a, Element> {
-    whitespace_wrap(either(single_element(), parent_element()))
+fn element<'a>() -> impl Parser<'a, Node> {
+    whitespace_wrap(either(
+        single_element(),
+        either(parent_element(), text_node()),
+    ))
 }
 
-fn parent_element<'a>() -> impl Parser<'a, Element> {
+fn text_node<'a>() -> impl Parser<'a, Node> {
+    one_or_more(any_char.pred(|c| *c != '<')).map(|chars| Node::Text(chars.into_iter().collect()))
+}
+
+fn parent_element<'a>() -> impl Parser<'a, Node> {
     open_element().and_then(|el| {
         left(zero_or_more(element()), close_element(el.name.clone())).map(move |children| {
             let mut el = el.clone();
             el.children = children;
-            el
+            Node::Node(el)
         })
     })
 }
 
-fn single_element<'a>() -> impl Parser<'a, Element> {
-    left(element_start(), pair(space0(), match_literal("/>"))).map(|(name, attrs)| Element {
-        name,
-        attrs,
-        children: vec![],
+fn single_element<'a>() -> impl Parser<'a, Node> {
+    left(element_start(), pair(space0(), match_literal("/>"))).map(|(name, attrs)| {
+        Node::Node(ElementNode {
+            name,
+            attrs,
+            children: vec![],
+        })
     })
 }
 
-fn open_element<'a>() -> impl Parser<'a, Element> {
-    left(element_start(), pair(space0(), match_literal(">"))).map(|(name, attrs)| Element {
+fn open_element<'a>() -> impl Parser<'a, ElementNode> {
+    left(element_start(), pair(space0(), match_literal(">"))).map(|(name, attrs)| ElementNode {
         name,
         attrs,
         children: vec![],
@@ -407,22 +422,22 @@ fn single_element_parser() {
     assert_eq!(
         Ok((
             "",
-            Element {
+            Node::Node(ElementNode {
                 name: "div".to_string(),
                 attrs: vec![("class".to_string(), "float".to_string())],
                 children: vec![]
-            }
+            })
         )),
         single_element().parse("<div class=\"float\"/>")
     );
     assert_eq!(
         Ok((
             "",
-            Element {
+            Node::Node(ElementNode {
                 name: "div".to_string(),
                 attrs: vec![("class".to_string(), "float".to_string())],
                 children: vec![]
-            }
+            })
         )),
         single_element().parse("<div class=\"float\" />")
     );
@@ -437,112 +452,142 @@ fn xml_parser() {
                 <bottom label="Another bottom"/>
             </middle>
         </top>"#;
-    let parsed_doc = Element {
+    let parsed_doc = Node::Node(ElementNode {
         name: "top".to_string(),
         attrs: vec![("label".to_string(), "Top".to_string())],
         children: vec![
-            Element {
+            Node::Node(ElementNode {
                 name: "semi-bottom".to_string(),
                 attrs: vec![("label".to_string(), "Bottom".to_string())],
                 children: vec![],
-            },
-            Element {
+            }),
+            Node::Node(ElementNode {
                 name: "middle".to_string(),
                 attrs: vec![],
-                children: vec![Element {
+                children: vec![Node::Node(ElementNode {
                     name: "bottom".to_string(),
                     attrs: vec![("label".to_string(), "Another bottom".to_string())],
                     children: vec![],
-                }],
-            },
+                })],
+            }),
         ],
-    };
+    });
     assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
 }
 
 #[test]
 fn mismatched_closing_tag() {
-    let doc = r#"
-        <top>
-            <bottom/>
-        </middle>"#;
-    assert_eq!(Err("</middle>"), element().parse(doc));
+    let doc = r#"<top><bottom/></middle>"#;
+    assert_eq!(Err("<top><bottom/></middle>"), element().parse(doc));
 }
 
 #[test]
 fn single_quoted_string() {
     let doc = r#"<top foo='hello'/>"#;
-    let parsed_doc = Element {
+    let parsed_doc = Node::Node(ElementNode {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), "hello".to_string())],
         children: vec![],
-    };
+    });
     assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
 }
 
 #[test]
 fn mixed_quoted_string() {
     let doc = r#"<top foo="hello' bar='world"/>"#;
-    let parsed_doc = Element {
+    let parsed_doc = Node::Node(ElementNode {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), "hello' bar='world".to_string())],
         children: vec![],
-    };
+    });
     assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
 
     let doc = r#"<top foo='hello" bar="world'/>"#;
-    let parsed_doc = Element {
+    let parsed_doc = Node::Node(ElementNode {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), r#"hello" bar="world"#.to_string())],
         children: vec![],
-    };
+    });
     assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
 }
 
 #[test]
 fn mismatched_quoted_string() {
     let doc = r#"<top foo="hello'/>"#;
-    assert_eq!(Err(r#"foo="hello'/>"#), element().parse(doc));
+    assert_eq!(Err(r#"<top foo="hello'/>"#), element().parse(doc));
 
     let doc = r#"<top foo='hello"/>"#;
-    assert_eq!(Err(r#"foo='hello"/>"#), element().parse(doc));
+    assert_eq!(Err(r#"<top foo='hello"/>"#), element().parse(doc));
 }
 
 #[test]
 fn escaped_quoted_string_01() {
     let doc = r#"<top foo="hel\"lo"/>"#;
-    let parsed_doc = Element {
+    let parsed_doc = Node::Node(ElementNode {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), r#"hel"lo"#.to_string())],
         children: vec![],
-    };
+    });
     assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
 }
 
 #[test]
 fn escaped_quoted_string_02() {
     let doc = r#"<top foo='hel\'lo'/>"#;
-    let parsed_doc = Element {
+    let parsed_doc = Node::Node(ElementNode {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), r#"hel'lo"#.to_string())],
         children: vec![],
-    };
+    });
     assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
 }
 
 #[test]
 fn invalid_escaped_quoted_string() {
     let doc = r#"<top foo='hel\lo'/>"#;
-    assert_eq!(Err(r#"foo='hel\lo'/>"#), element().parse(doc));
+    assert_eq!(Err(r#"<top foo='hel\lo'/>"#), element().parse(doc));
 }
 
 #[test]
 fn escaped_backslash_quoted_string() {
     let doc = r#"<top foo='hel\\lo'/>"#;
-    let parsed_doc = Element {
+    let parsed_doc = Node::Node(ElementNode {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), r#"hel\lo"#.to_string())],
         children: vec![],
-    };
+    });
+    assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
+}
+
+#[test]
+fn text_node_test_01() {
+    let doc = r#"<greet>welcome</greet>"#;
+    let parsed_doc = Node::Node(ElementNode {
+        name: "greet".to_string(),
+        attrs: vec![],
+        children: vec![Node::Text("welcome".to_string())],
+    });
+    assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
+}
+#[test]
+fn text_node_test_02() {
+    let doc = r#"<greet>welcome<foo/><bar></bar></greet>"#;
+    let parsed_doc = Node::Node(ElementNode {
+        name: "greet".to_string(),
+        attrs: vec![],
+        children: vec![
+            Node::Text("welcome".to_string()),
+            Node::Node(ElementNode {
+                name: "foo".to_string(),
+                attrs: vec![],
+                children: vec![],
+            }),
+            Node::Node(ElementNode {
+                name: "bar".to_string(),
+                attrs: vec![],
+                children: vec![],
+            }),
+        ],
+    });
     assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
 }
