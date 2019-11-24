@@ -34,12 +34,14 @@ struct Map<P, T, F> {
     marker: PhantomData<T>,
 }
 
-impl<'a, P, F, T, U> Parser<'a, U> for Map<P, T, F>
+impl<P, F, T, U> Parser for Map<P, T, F>
 where
-    P: Parser<'a, T>,
+    P: Parser<Output = T>,
     F: Fn(T) -> U,
 {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, U> {
+    type Output = U;
+
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, U> {
         self.parser
             .parse(input)
             .map(|(rest, parsed)| (rest, (self.f)(parsed)))
@@ -51,12 +53,14 @@ struct Predicate<P, F> {
     predicate: F,
 }
 
-impl<'a, P, F, T> Parser<'a, T> for Predicate<P, F>
+impl<P, F, T> Parser for Predicate<P, F>
 where
-    P: Parser<'a, T>,
+    P: Parser<Output = T>,
     F: Fn(&T) -> bool,
 {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, T> {
+    type Output = T;
+
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, T> {
         if let Ok((rest, parsed)) = self.parser.parse(input) {
             if (self.predicate)(&parsed) {
                 return Ok((rest, parsed));
@@ -72,25 +76,29 @@ struct AndThen<P, T, F> {
     marker: PhantomData<T>,
 }
 
-impl<'a, P, Q, F, T, U> Parser<'a, U> for AndThen<P, T, F>
+impl<P, Q, F, T, U> Parser for AndThen<P, T, F>
 where
-    P: Parser<'a, T>,
-    Q: Parser<'a, U>,
+    P: Parser<Output = T>,
+    Q: Parser<Output = U>,
     F: Fn(T) -> Q,
 {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, U> {
+    type Output = U;
+
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, U> {
         let (rest, parsed) = self.parser.parse(input)?;
         (self.f)(parsed).parse(rest)
     }
 }
 
-trait Parser<'a, T> {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, T>;
+trait Parser {
+    type Output;
 
-    fn map<F, U>(self, f: F) -> Map<Self, T, F>
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, Self::Output>;
+
+    fn map<F, U>(self, f: F) -> Map<Self, Self::Output, F>
     where
         Self: Sized,
-        F: Fn(T) -> U,
+        F: Fn(Self::Output) -> U,
     {
         Map {
             parser: self,
@@ -102,7 +110,7 @@ trait Parser<'a, T> {
     fn pred<F>(self, predicate: F) -> Predicate<Self, F>
     where
         Self: Sized,
-        F: Fn(&T) -> bool,
+        F: Fn(&Self::Output) -> bool,
     {
         Predicate {
             parser: self,
@@ -110,11 +118,11 @@ trait Parser<'a, T> {
         }
     }
 
-    fn and_then<P, F, U>(self, f: F) -> AndThen<Self, T, F>
+    fn and_then<P, F, U>(self, f: F) -> AndThen<Self, Self::Output, F>
     where
         Self: Sized,
-        F: Fn(T) -> P,
-        P: Parser<'a, U>,
+        F: Fn(Self::Output) -> P,
+        P: Parser<Output = U>,
     {
         AndThen {
             parser: self,
@@ -135,23 +143,25 @@ impl<P, Q> Either<P, Q> {
     }
 }
 
-impl<'a, P, Q, T> Parser<'a, T> for Either<P, Q>
+impl<P, Q, T> Parser for Either<P, Q>
 where
-    P: Parser<'a, T>,
-    Q: Parser<'a, T>,
+    P: Parser<Output = T>,
+    Q: Parser<Output = T>,
 {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, T> {
+    type Output = T;
+
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, T> {
         self.first
             .parse(input)
             .or_else(|_| self.second.parse(input))
     }
 }
 
-struct ElementParser<'a> {
-    parser: Box<dyn 'a + Parser<'a, Node>>,
+struct ElementParser {
+    parser: Box<dyn Parser<Output = Node>>,
 }
 
-impl ElementParser<'_> {
+impl ElementParser {
     fn new() -> Self {
         Self {
             parser: Box::new(whitespace_wrap(Either::new(
@@ -162,21 +172,23 @@ impl ElementParser<'_> {
     }
 }
 
-impl<'a> Parser<'a, Node> for ElementParser<'a> {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, Node> {
+impl Parser for ElementParser {
+    type Output = Node;
+
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, Node> {
         self.parser.parse(input)
     }
 }
 
-fn element<'a>() -> ElementParser<'a> {
+fn element() -> ElementParser {
     ElementParser::new()
 }
 
-fn text_node<'a>() -> impl Parser<'a, Node> {
+fn text_node() -> impl Parser<Output = Node> {
     OneOrMore::new(AnyChar.pred(|c| *c != '<')).map(|chars| Node::Text(chars.into_iter().collect()))
 }
 
-fn parent_element<'a>() -> impl Parser<'a, Node> {
+fn parent_element() -> impl Parser<Output = Node> {
     open_element().and_then(|el| {
         left(ZeroOrMore::new(element()), close_element(el.name.clone())).map(move |children| {
             let mut el = el.clone();
@@ -186,7 +198,7 @@ fn parent_element<'a>() -> impl Parser<'a, Node> {
     })
 }
 
-fn single_element<'a>() -> impl Parser<'a, Node> {
+fn single_element<'a>() -> impl Parser<Output = Node> {
     left(
         element_start(),
         Pair::new(space0(), LiteralParser::new("/>")),
@@ -200,7 +212,7 @@ fn single_element<'a>() -> impl Parser<'a, Node> {
     })
 }
 
-fn open_element<'a>() -> impl Parser<'a, Element> {
+fn open_element<'a>() -> impl Parser<Output = Element> {
     left(
         element_start(),
         Pair::new(space0(), LiteralParser::new(">")),
@@ -212,7 +224,7 @@ fn open_element<'a>() -> impl Parser<'a, Element> {
     })
 }
 
-fn close_element<'a>(expected_name: String) -> impl Parser<'a, String> {
+fn close_element<'a>(expected_name: String) -> impl Parser<Output = String> {
     right(
         LiteralParser::new("</"),
         left(Identifier, LiteralParser::new(">")),
@@ -220,15 +232,15 @@ fn close_element<'a>(expected_name: String) -> impl Parser<'a, String> {
     .pred(move |name| name == &expected_name)
 }
 
-fn element_start<'a>() -> impl Parser<'a, (String, Vec<(String, String)>)> {
+fn element_start<'a>() -> impl Parser<Output = (String, Vec<(String, String)>)> {
     right(LiteralParser::new("<"), Pair::new(Identifier, attributes()))
 }
 
-fn attributes<'a>() -> impl Parser<'a, Vec<(String, String)>> {
+fn attributes<'a>() -> impl Parser<Output = Vec<(String, String)>> {
     ZeroOrMore::new(right(space1(), attribute_pair()))
 }
 
-fn attribute_pair<'a>() -> impl Parser<'a, (String, String)> {
+fn attribute_pair<'a>() -> impl Parser<Output = (String, String)> {
     Pair::new(Identifier, right(LiteralParser::new("="), quoted_string()))
 }
 
@@ -242,8 +254,10 @@ impl LiteralParser {
     }
 }
 
-impl<'a> Parser<'a, ()> for LiteralParser {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, ()> {
+impl Parser for LiteralParser {
+    type Output = ();
+
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, ()> {
         match input.get(0..self.expected.len()) {
             Some(next) if next == self.expected => Ok((&input[next.len()..], ())),
             _ => Err(input),
@@ -253,8 +267,10 @@ impl<'a> Parser<'a, ()> for LiteralParser {
 
 struct AnyChar;
 
-impl<'a> Parser<'a, char> for AnyChar {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, char> {
+impl Parser for AnyChar {
+    type Output = char;
+
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, char> {
         match input.chars().next() {
             Some(next) => Ok((&input[next.len_utf8()..], next)),
             _ => Err(input),
@@ -262,27 +278,27 @@ impl<'a> Parser<'a, char> for AnyChar {
     }
 }
 
-fn match_char<'a>(expected: char) -> impl Parser<'a, char> {
+fn match_char<'a>(expected: char) -> impl Parser<Output = char> {
     AnyChar.pred(move |c| *c == expected)
 }
 
-fn whitespace_char<'a>() -> impl Parser<'a, char> {
+fn whitespace_char<'a>() -> impl Parser<Output = char> {
     AnyChar.pred(|c| c.is_whitespace())
 }
 
-fn space0<'a>() -> impl Parser<'a, Vec<char>> {
+fn space0<'a>() -> impl Parser<Output = Vec<char>> {
     ZeroOrMore::new(whitespace_char())
 }
 
-fn space1<'a>() -> impl Parser<'a, Vec<char>> {
+fn space1<'a>() -> impl Parser<Output = Vec<char>> {
     OneOrMore::new(whitespace_char())
 }
 
-fn escaped_char<'a>(quote: char) -> impl Parser<'a, char> {
+fn escaped_char<'a>(quote: char) -> impl Parser<Output = char> {
     match_char('\\').and_then(move |_| Either::new(match_char(quote), match_char('\\')))
 }
 
-fn quoted_string<'a>() -> impl Parser<'a, String> {
+fn quoted_string<'a>() -> impl Parser<Output = String> {
     Either::new(match_char('"'), match_char('\''))
         .and_then(|opening_char| {
             left(
@@ -298,8 +314,10 @@ fn quoted_string<'a>() -> impl Parser<'a, String> {
 
 struct Identifier;
 
-impl<'a> Parser<'a, String> for Identifier {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, String> {
+impl Parser for Identifier {
+    type Output = String;
+
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, String> {
         let mut matched = String::new();
         let mut chars = input.chars();
 
@@ -331,11 +349,13 @@ impl<P> OneOrMore<P> {
     }
 }
 
-impl<'a, P, T> Parser<'a, Vec<T>> for OneOrMore<P>
+impl<P, T> Parser for OneOrMore<P>
 where
-    P: Parser<'a, T>,
+    P: Parser<Output = T>,
 {
-    fn parse(&self, mut input: &'a str) -> ParseResult<'a, Vec<T>> {
+    type Output = Vec<T>;
+
+    fn parse<'a>(&self, mut input: &'a str) -> ParseResult<'a, Vec<T>> {
         let mut result = Vec::new();
 
         let (rest, parsed) = self.parser.parse(input)?;
@@ -361,11 +381,13 @@ impl<P> ZeroOrMore<P> {
     }
 }
 
-impl<'a, P, T> Parser<'a, Vec<T>> for ZeroOrMore<P>
+impl<P, T> Parser for ZeroOrMore<P>
 where
-    P: Parser<'a, T>,
+    P: Parser<Output = T>,
 {
-    fn parse(&self, mut input: &'a str) -> ParseResult<'a, Vec<T>> {
+    type Output = Vec<T>;
+
+    fn parse<'a>(&self, mut input: &'a str) -> ParseResult<'a, Vec<T>> {
         let mut result = Vec::new();
 
         while let Ok((rest, parsed)) = self.parser.parse(input) {
@@ -388,37 +410,39 @@ impl<P, Q> Pair<P, Q> {
     }
 }
 
-impl<'a, P, Q, T, U> Parser<'a, (T, U)> for Pair<P, Q>
+impl<P, Q, T, U> Parser for Pair<P, Q>
 where
-    P: Parser<'a, T>,
-    Q: Parser<'a, U>,
+    P: Parser<Output = T>,
+    Q: Parser<Output = U>,
 {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, (T, U)> {
+    type Output = (T, U);
+
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, (T, U)> {
         let (rest, first) = self.first.parse(input)?;
         let (rest, second) = self.second.parse(rest)?;
         Ok((rest, (first, second)))
     }
 }
 
-fn left<'a, P1, P2, R1, R2>(parser_1: P1, parser_2: P2) -> impl Parser<'a, R1>
+fn left<'a, P1, P2, R1, R2>(parser_1: P1, parser_2: P2) -> impl Parser<Output = R1>
 where
-    P1: Parser<'a, R1>,
-    P2: Parser<'a, R2>,
+    P1: Parser<Output = R1>,
+    P2: Parser<Output = R2>,
 {
     Pair::new(parser_1, parser_2).map(|(left, _right)| left)
 }
 
-fn right<'a, P1, P2, R1, R2>(parser_1: P1, parser_2: P2) -> impl Parser<'a, R2>
+fn right<'a, P1, P2, R1, R2>(parser_1: P1, parser_2: P2) -> impl Parser<Output = R2>
 where
-    P1: Parser<'a, R1>,
-    P2: Parser<'a, R2>,
+    P1: Parser<Output = R1>,
+    P2: Parser<Output = R2>,
 {
     Pair::new(parser_1, parser_2).map(|(_left, right)| right)
 }
 
-fn whitespace_wrap<'a, P, A>(parser: P) -> impl Parser<'a, A>
+fn whitespace_wrap<'a, P, A>(parser: P) -> impl Parser<Output = A>
 where
-    P: Parser<'a, A>,
+    P: Parser<Output = A>,
 {
     right(space0(), left(parser, space0()))
 }
