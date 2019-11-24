@@ -126,7 +126,7 @@ trait Parser<'a, T> {
 
 impl<'a, T, P: Parser<'a, T>> Parser<'a, T> for Box<P> {
     fn parse(&self, input: &'a str) -> ParseResult<'a, T> {
-        self.parse(input)
+        (&**self).parse(input)
     }
 }
 
@@ -153,11 +153,29 @@ where
     }
 }
 
-fn element<'a>() -> impl Parser<'a, Node> {
-    whitespace_wrap(Either::new(
-        single_element(),
-        Either::new(parent_element(), text_node()),
-    ))
+struct ElementParser<'a> {
+    parser: Box<dyn 'a + Parser<'a, Node>>,
+}
+
+impl ElementParser<'_> {
+    fn new() -> Self {
+        Self {
+            parser: Box::new(whitespace_wrap(Either::new(
+                single_element(),
+                Either::new(parent_element(), text_node()),
+            ))),
+        }
+    }
+}
+
+impl<'a> Parser<'a, Node> for ElementParser<'a> {
+    fn parse(&self, input: &'a str) -> ParseResult<'a, Node> {
+        self.parser.parse(input)
+    }
+}
+
+fn element<'a>() -> ElementParser<'a> {
+    ElementParser::new()
 }
 
 fn text_node<'a>() -> impl Parser<'a, Node> {
