@@ -193,7 +193,11 @@ fn parent_element<'a>() -> impl Parser<'a, Node> {
 }
 
 fn single_element<'a>() -> impl Parser<'a, Node> {
-    left(element_start(), Pair::new(space0(), match_literal("/>"))).map(|(name, attrs)| {
+    left(
+        element_start(),
+        Pair::new(space0(), LiteralParser::new("/>")),
+    )
+    .map(|(name, attrs)| {
         Node::Element(Element {
             name,
             attrs,
@@ -203,7 +207,11 @@ fn single_element<'a>() -> impl Parser<'a, Node> {
 }
 
 fn open_element<'a>() -> impl Parser<'a, Element> {
-    left(element_start(), Pair::new(space0(), match_literal(">"))).map(|(name, attrs)| Element {
+    left(
+        element_start(),
+        Pair::new(space0(), LiteralParser::new(">")),
+    )
+    .map(|(name, attrs)| Element {
         name,
         attrs,
         children: vec![],
@@ -211,12 +219,15 @@ fn open_element<'a>() -> impl Parser<'a, Element> {
 }
 
 fn close_element<'a>(expected_name: String) -> impl Parser<'a, String> {
-    right(match_literal("</"), left(Identifier, match_literal(">")))
-        .pred(move |name| name == &expected_name)
+    right(
+        LiteralParser::new("</"),
+        left(Identifier, LiteralParser::new(">")),
+    )
+    .pred(move |name| name == &expected_name)
 }
 
 fn element_start<'a>() -> impl Parser<'a, (String, Vec<(String, String)>)> {
-    right(match_literal("<"), Pair::new(Identifier, attributes()))
+    right(LiteralParser::new("<"), Pair::new(Identifier, attributes()))
 }
 
 fn attributes<'a>() -> impl Parser<'a, Vec<(String, String)>> {
@@ -224,11 +235,17 @@ fn attributes<'a>() -> impl Parser<'a, Vec<(String, String)>> {
 }
 
 fn attribute_pair<'a>() -> impl Parser<'a, (String, String)> {
-    Pair::new(Identifier, right(match_literal("="), quoted_string()))
+    Pair::new(Identifier, right(LiteralParser::new("="), quoted_string()))
 }
 
 struct LiteralParser {
     expected: &'static str,
+}
+
+impl LiteralParser {
+    fn new(expected: &'static str) -> Self {
+        Self { expected }
+    }
 }
 
 impl<'a> Parser<'a, ()> for LiteralParser {
@@ -238,10 +255,6 @@ impl<'a> Parser<'a, ()> for LiteralParser {
             _ => Err(input),
         }
     }
-}
-
-fn match_literal<'a>(expected: &'static str) -> LiteralParser {
-    LiteralParser { expected }
 }
 
 struct AnyChar;
@@ -418,7 +431,7 @@ where
 
 #[test]
 fn literal_parser() {
-    let parse_joe = match_literal("Hello joe!");
+    let parse_joe = LiteralParser::new("Hello joe!");
 
     assert_eq!(Ok(("", ())), parse_joe.parse("Hello joe!"));
     assert_eq!(
@@ -446,7 +459,7 @@ fn identifier_parser() {
 
 #[test]
 fn pair_combinator() {
-    let tag_opener = right(match_literal("<"), Identifier);
+    let tag_opener = right(LiteralParser::new("<"), Identifier);
     assert_eq!(
         Ok(("/>", "my-first-element".to_string())),
         tag_opener.parse("<my-first-element/>")
@@ -457,7 +470,7 @@ fn pair_combinator() {
 
 #[test]
 fn one_or_more_combinator() {
-    let parser = OneOrMore::new(match_literal("ha"));
+    let parser = OneOrMore::new(LiteralParser::new("ha"));
     assert_eq!(Ok(("", vec![(), (), ()])), parser.parse("hahaha"));
     assert_eq!(Err("ahah"), parser.parse("ahah"));
     assert_eq!(Err(""), parser.parse(""));
@@ -465,7 +478,7 @@ fn one_or_more_combinator() {
 
 #[test]
 fn zero_or_more_combinator() {
-    let parser = ZeroOrMore::new(match_literal("ha"));
+    let parser = ZeroOrMore::new(LiteralParser::new("ha"));
     assert_eq!(Ok(("", vec![(), (), ()])), parser.parse("hahaha"));
     assert_eq!(Ok(("ahah", vec![])), parser.parse("ahah"));
     assert_eq!(Ok(("", vec![])), parser.parse(""));
