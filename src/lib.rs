@@ -124,12 +124,6 @@ trait Parser<'a, T> {
     }
 }
 
-impl<'a, T, P: Parser<'a, T>> Parser<'a, T> for Box<P> {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, T> {
-        (&**self).parse(input)
-    }
-}
-
 struct Either<P, Q> {
     first: P,
     second: Q,
