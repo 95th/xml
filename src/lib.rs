@@ -2,12 +2,12 @@ use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
-    Node(ElementNode),
+    Element(Element),
     Text(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ElementNode {
+pub struct Element {
     name: String,
     attrs: Vec<(String, String)>,
     children: Vec<Node>,
@@ -106,14 +106,14 @@ fn parent_element<'a>() -> impl Parser<'a, Node> {
         left(zero_or_more(element()), close_element(el.name.clone())).map(move |children| {
             let mut el = el.clone();
             el.children = children;
-            Node::Node(el)
+            Node::Element(el)
         })
     })
 }
 
 fn single_element<'a>() -> impl Parser<'a, Node> {
     left(element_start(), pair(space0(), match_literal("/>"))).map(|(name, attrs)| {
-        Node::Node(ElementNode {
+        Node::Element(Element {
             name,
             attrs,
             children: vec![],
@@ -121,8 +121,8 @@ fn single_element<'a>() -> impl Parser<'a, Node> {
     })
 }
 
-fn open_element<'a>() -> impl Parser<'a, ElementNode> {
-    left(element_start(), pair(space0(), match_literal(">"))).map(|(name, attrs)| ElementNode {
+fn open_element<'a>() -> impl Parser<'a, Element> {
+    left(element_start(), pair(space0(), match_literal(">"))).map(|(name, attrs)| Element {
         name,
         attrs,
         children: vec![],
@@ -422,7 +422,7 @@ fn single_element_parser() {
     assert_eq!(
         Ok((
             "",
-            Node::Node(ElementNode {
+            Node::Element(Element {
                 name: "div".to_string(),
                 attrs: vec![("class".to_string(), "float".to_string())],
                 children: vec![]
@@ -433,7 +433,7 @@ fn single_element_parser() {
     assert_eq!(
         Ok((
             "",
-            Node::Node(ElementNode {
+            Node::Element(Element {
                 name: "div".to_string(),
                 attrs: vec![("class".to_string(), "float".to_string())],
                 children: vec![]
@@ -452,19 +452,19 @@ fn xml_parser() {
                 <bottom label="Another bottom"/>
             </middle>
         </top>"#;
-    let parsed_doc = Node::Node(ElementNode {
+    let parsed_doc = Node::Element(Element {
         name: "top".to_string(),
         attrs: vec![("label".to_string(), "Top".to_string())],
         children: vec![
-            Node::Node(ElementNode {
+            Node::Element(Element {
                 name: "semi-bottom".to_string(),
                 attrs: vec![("label".to_string(), "Bottom".to_string())],
                 children: vec![],
             }),
-            Node::Node(ElementNode {
+            Node::Element(Element {
                 name: "middle".to_string(),
                 attrs: vec![],
-                children: vec![Node::Node(ElementNode {
+                children: vec![Node::Element(Element {
                     name: "bottom".to_string(),
                     attrs: vec![("label".to_string(), "Another bottom".to_string())],
                     children: vec![],
@@ -484,7 +484,7 @@ fn mismatched_closing_tag() {
 #[test]
 fn single_quoted_string() {
     let doc = r#"<top foo='hello'/>"#;
-    let parsed_doc = Node::Node(ElementNode {
+    let parsed_doc = Node::Element(Element {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), "hello".to_string())],
         children: vec![],
@@ -495,7 +495,7 @@ fn single_quoted_string() {
 #[test]
 fn mixed_quoted_string() {
     let doc = r#"<top foo="hello' bar='world"/>"#;
-    let parsed_doc = Node::Node(ElementNode {
+    let parsed_doc = Node::Element(Element {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), "hello' bar='world".to_string())],
         children: vec![],
@@ -503,7 +503,7 @@ fn mixed_quoted_string() {
     assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
 
     let doc = r#"<top foo='hello" bar="world'/>"#;
-    let parsed_doc = Node::Node(ElementNode {
+    let parsed_doc = Node::Element(Element {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), r#"hello" bar="world"#.to_string())],
         children: vec![],
@@ -523,7 +523,7 @@ fn mismatched_quoted_string() {
 #[test]
 fn escaped_quoted_string_01() {
     let doc = r#"<top foo="hel\"lo"/>"#;
-    let parsed_doc = Node::Node(ElementNode {
+    let parsed_doc = Node::Element(Element {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), r#"hel"lo"#.to_string())],
         children: vec![],
@@ -534,7 +534,7 @@ fn escaped_quoted_string_01() {
 #[test]
 fn escaped_quoted_string_02() {
     let doc = r#"<top foo='hel\'lo'/>"#;
-    let parsed_doc = Node::Node(ElementNode {
+    let parsed_doc = Node::Element(Element {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), r#"hel'lo"#.to_string())],
         children: vec![],
@@ -551,7 +551,7 @@ fn invalid_escaped_quoted_string() {
 #[test]
 fn escaped_backslash_quoted_string() {
     let doc = r#"<top foo='hel\\lo'/>"#;
-    let parsed_doc = Node::Node(ElementNode {
+    let parsed_doc = Node::Element(Element {
         name: "top".to_string(),
         attrs: vec![("foo".to_string(), r#"hel\lo"#.to_string())],
         children: vec![],
@@ -562,7 +562,7 @@ fn escaped_backslash_quoted_string() {
 #[test]
 fn text_node_test_01() {
     let doc = r#"<greet>welcome</greet>"#;
-    let parsed_doc = Node::Node(ElementNode {
+    let parsed_doc = Node::Element(Element {
         name: "greet".to_string(),
         attrs: vec![],
         children: vec![Node::Text("welcome".to_string())],
@@ -572,17 +572,17 @@ fn text_node_test_01() {
 #[test]
 fn text_node_test_02() {
     let doc = r#"<greet>welcome<foo/><bar></bar></greet>"#;
-    let parsed_doc = Node::Node(ElementNode {
+    let parsed_doc = Node::Element(Element {
         name: "greet".to_string(),
         attrs: vec![],
         children: vec![
             Node::Text("welcome".to_string()),
-            Node::Node(ElementNode {
+            Node::Element(Element {
                 name: "foo".to_string(),
                 attrs: vec![],
                 children: vec![],
             }),
-            Node::Node(ElementNode {
+            Node::Element(Element {
                 name: "bar".to_string(),
                 attrs: vec![],
                 children: vec![],
