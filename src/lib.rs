@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,84 +28,145 @@ impl FromStr for Node {
 
 type ParseResult<'a, T> = Result<(&'a str, T), &'a str>;
 
+struct Map<P, T, F> {
+    parser: P,
+    f: F,
+    marker: PhantomData<T>,
+}
+
+impl<'a, P, F, T, U> Parser<'a, U> for Map<P, T, F>
+where
+    P: Parser<'a, T>,
+    F: Fn(T) -> U,
+{
+    fn parse(&self, input: &'a str) -> ParseResult<'a, U> {
+        self.parser
+            .parse(input)
+            .map(|(rest, parsed)| (rest, (self.f)(parsed)))
+    }
+}
+
+struct Predicate<P, F> {
+    parser: P,
+    predicate: F,
+}
+
+impl<'a, P, F, T> Parser<'a, T> for Predicate<P, F>
+where
+    P: Parser<'a, T>,
+    F: Fn(&T) -> bool,
+{
+    fn parse(&self, input: &'a str) -> ParseResult<'a, T> {
+        if let Ok((rest, parsed)) = self.parser.parse(input) {
+            if (self.predicate)(&parsed) {
+                return Ok((rest, parsed));
+            }
+        }
+        Err(input)
+    }
+}
+
+struct AndThen<P, T, F> {
+    parser: P,
+    f: F,
+    marker: PhantomData<T>,
+}
+
+impl<'a, P, Q, F, T, U> Parser<'a, U> for AndThen<P, T, F>
+where
+    P: Parser<'a, T>,
+    Q: Parser<'a, U>,
+    F: Fn(T) -> Q,
+{
+    fn parse(&self, input: &'a str) -> ParseResult<'a, U> {
+        let (rest, parsed) = self.parser.parse(input)?;
+        (self.f)(parsed).parse(rest)
+    }
+}
+
 trait Parser<'a, T> {
     fn parse(&self, input: &'a str) -> ParseResult<'a, T>;
 
-    fn map<F, U>(self, f: F) -> BoxedParser<'a, U>
+    fn map<F, U>(self, f: F) -> Map<Self, T, F>
     where
-        Self: 'a + Sized,
-        F: 'a + Fn(T) -> U,
-        T: 'a,
-        U: 'a,
+        Self: Sized,
+        F: Fn(T) -> U,
     {
-        BoxedParser::new(map(self, f))
+        Map {
+            parser: self,
+            f,
+            marker: PhantomData,
+        }
     }
 
-    fn pred<F>(self, predicate: F) -> BoxedParser<'a, T>
+    fn pred<F>(self, predicate: F) -> Predicate<Self, F>
     where
-        Self: 'a + Sized,
-        T: 'a,
-        F: 'a + Fn(&T) -> bool,
+        Self: Sized,
+        F: Fn(&T) -> bool,
     {
-        BoxedParser::new(pred(self, predicate))
+        Predicate {
+            parser: self,
+            predicate,
+        }
     }
 
-    fn and_then<P, F, U>(self, f: F) -> BoxedParser<'a, U>
+    fn and_then<P, F, U>(self, f: F) -> AndThen<Self, T, F>
     where
-        Self: 'a + Sized,
-        T: 'a,
-        F: 'a + Fn(T) -> P,
-        P: 'a + Parser<'a, U>,
-        U: 'a,
+        Self: Sized,
+        F: Fn(T) -> P,
+        P: Parser<'a, U>,
     {
-        BoxedParser::new(and_then(self, f))
-    }
-}
-
-pub struct BoxedParser<'a, T> {
-    parser: Box<dyn Parser<'a, T> + 'a>,
-}
-
-impl<'a, T> BoxedParser<'a, T> {
-    fn new<P>(parser: P) -> Self
-    where
-        P: Parser<'a, T> + 'a,
-    {
-        Self {
-            parser: Box::new(parser),
+        AndThen {
+            parser: self,
+            f,
+            marker: PhantomData,
         }
     }
 }
 
-impl<'a, T> Parser<'a, T> for BoxedParser<'a, T> {
+impl<'a, T, P: Parser<'a, T>> Parser<'a, T> for Box<P> {
     fn parse(&self, input: &'a str) -> ParseResult<'a, T> {
-        self.parser.parse(input)
+        self.parse(input)
     }
 }
 
-impl<'a, F, T> Parser<'a, T> for F
+struct Either<P, Q> {
+    first: P,
+    second: Q,
+}
+
+impl<P, Q> Either<P, Q> {
+    fn new(first: P, second: Q) -> Self {
+        Self { first, second }
+    }
+}
+
+impl<'a, P, Q, T> Parser<'a, T> for Either<P, Q>
 where
-    F: Fn(&'a str) -> ParseResult<'a, T>,
+    P: Parser<'a, T>,
+    Q: Parser<'a, T>,
 {
     fn parse(&self, input: &'a str) -> ParseResult<'a, T> {
-        self(input)
+        self.first
+            .parse(input)
+            .or_else(|_| self.second.parse(input))
     }
 }
 
 fn element<'a>() -> impl Parser<'a, Node> {
-    whitespace_wrap(either(
+    whitespace_wrap(Either::new(
         single_element(),
-        either(parent_element(), text_node()),
+        Either::new(parent_element(), text_node()),
     ))
 }
 
 fn text_node<'a>() -> impl Parser<'a, Node> {
-    one_or_more(any_char.pred(|c| *c != '<')).map(|chars| Node::Text(chars.into_iter().collect()))
+    OneOrMore::new(AnyChar.pred(|c| *c != '<')).map(|chars| Node::Text(chars.into_iter().collect()))
 }
 
 fn parent_element<'a>() -> impl Parser<'a, Node> {
     open_element().and_then(|el| {
-        left(zero_or_more(element()), close_element(el.name.clone())).map(move |children| {
+        left(ZeroOrMore::new(element()), close_element(el.name.clone())).map(move |children| {
             let mut el = el.clone();
             el.children = children;
             Node::Element(el)
@@ -113,7 +175,7 @@ fn parent_element<'a>() -> impl Parser<'a, Node> {
 }
 
 fn single_element<'a>() -> impl Parser<'a, Node> {
-    left(element_start(), pair(space0(), match_literal("/>"))).map(|(name, attrs)| {
+    left(element_start(), Pair::new(space0(), match_literal("/>"))).map(|(name, attrs)| {
         Node::Element(Element {
             name,
             attrs,
@@ -123,7 +185,7 @@ fn single_element<'a>() -> impl Parser<'a, Node> {
 }
 
 fn open_element<'a>() -> impl Parser<'a, Element> {
-    left(element_start(), pair(space0(), match_literal(">"))).map(|(name, attrs)| Element {
+    left(element_start(), Pair::new(space0(), match_literal(">"))).map(|(name, attrs)| Element {
         name,
         attrs,
         children: vec![],
@@ -131,63 +193,77 @@ fn open_element<'a>() -> impl Parser<'a, Element> {
 }
 
 fn close_element<'a>(expected_name: String) -> impl Parser<'a, String> {
-    right(match_literal("</"), left(identifier, match_literal(">")))
+    right(match_literal("</"), left(Identifier, match_literal(">")))
         .pred(move |name| name == &expected_name)
 }
 
 fn element_start<'a>() -> impl Parser<'a, (String, Vec<(String, String)>)> {
-    right(match_literal("<"), pair(identifier, attributes()))
+    right(match_literal("<"), Pair::new(Identifier, attributes()))
 }
 
 fn attributes<'a>() -> impl Parser<'a, Vec<(String, String)>> {
-    zero_or_more(right(space1(), attribute_pair()))
+    ZeroOrMore::new(right(space1(), attribute_pair()))
 }
 
 fn attribute_pair<'a>() -> impl Parser<'a, (String, String)> {
-    pair(identifier, right(match_literal("="), quoted_string()))
+    Pair::new(Identifier, right(match_literal("="), quoted_string()))
 }
 
-fn match_literal<'a>(expected: &'static str) -> impl Parser<'a, ()> {
-    move |input: &'a str| match input.get(0..expected.len()) {
-        Some(next) if next == expected => Ok((&input[next.len()..], ())),
-        _ => Err(input),
+struct LiteralParser {
+    expected: &'static str,
+}
+
+impl<'a> Parser<'a, ()> for LiteralParser {
+    fn parse(&self, input: &'a str) -> ParseResult<'a, ()> {
+        match input.get(0..self.expected.len()) {
+            Some(next) if next == self.expected => Ok((&input[next.len()..], ())),
+            _ => Err(input),
+        }
     }
 }
 
-fn any_char(input: &str) -> ParseResult<char> {
-    match input.chars().next() {
-        Some(next) => Ok((&input[next.len_utf8()..], next)),
-        _ => Err(input),
+fn match_literal<'a>(expected: &'static str) -> LiteralParser {
+    LiteralParser { expected }
+}
+
+struct AnyChar;
+
+impl<'a> Parser<'a, char> for AnyChar {
+    fn parse(&self, input: &'a str) -> ParseResult<'a, char> {
+        match input.chars().next() {
+            Some(next) => Ok((&input[next.len_utf8()..], next)),
+            _ => Err(input),
+        }
     }
 }
 
 fn match_char<'a>(expected: char) -> impl Parser<'a, char> {
-    pred(any_char, move |c| *c == expected)
+    AnyChar.pred(move |c| *c == expected)
 }
 
 fn whitespace_char<'a>() -> impl Parser<'a, char> {
-    pred(any_char, |c| c.is_whitespace())
+    AnyChar.pred(|c| c.is_whitespace())
 }
 
 fn space0<'a>() -> impl Parser<'a, Vec<char>> {
-    zero_or_more(whitespace_char())
+    ZeroOrMore::new(whitespace_char())
 }
 
 fn space1<'a>() -> impl Parser<'a, Vec<char>> {
-    one_or_more(whitespace_char())
+    OneOrMore::new(whitespace_char())
 }
 
 fn escaped_char<'a>(quote: char) -> impl Parser<'a, char> {
-    match_char('\\').and_then(move |_| either(match_char(quote), match_char('\\')))
+    match_char('\\').and_then(move |_| Either::new(match_char(quote), match_char('\\')))
 }
 
 fn quoted_string<'a>() -> impl Parser<'a, String> {
-    either(match_char('"'), match_char('\''))
+    Either::new(match_char('"'), match_char('\''))
         .and_then(|opening_char| {
             left(
-                zero_or_more(either(
+                ZeroOrMore::new(Either::new(
                     escaped_char(opening_char),
-                    any_char.pred(move |c| *c != opening_char && *c != '\\'),
+                    AnyChar.pred(move |c| *c != opening_char && *c != '\\'),
                 )),
                 match_char(opening_char),
             )
@@ -195,62 +271,53 @@ fn quoted_string<'a>() -> impl Parser<'a, String> {
         .map(|chars| chars.into_iter().collect())
 }
 
-fn identifier(input: &str) -> ParseResult<String> {
-    let mut matched = String::new();
-    let mut chars = input.chars();
+struct Identifier;
 
-    match chars.next() {
-        Some(next) if next.is_alphabetic() => matched.push(next),
-        _ => return Err(input),
-    }
+impl<'a> Parser<'a, String> for Identifier {
+    fn parse(&self, input: &'a str) -> ParseResult<'a, String> {
+        let mut matched = String::new();
+        let mut chars = input.chars();
 
-    while let Some(next) = chars.next() {
-        if next.is_alphanumeric() || next == '-' {
-            matched.push(next);
-        } else {
-            break;
+        match chars.next() {
+            Some(next) if next.is_alphabetic() => matched.push(next),
+            _ => return Err(input),
         }
-    }
 
-    let next_idx = matched.len();
-    Ok((&input[next_idx..], matched))
-}
-
-fn either<'a, P1, P2, A>(parser1: P1, parser2: P2) -> impl Parser<'a, A>
-where
-    P1: Parser<'a, A>,
-    P2: Parser<'a, A>,
-{
-    move |input| parser1.parse(input).or_else(|_| parser2.parse(input))
-}
-
-fn pred<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A>
-where
-    P: Parser<'a, A>,
-    F: Fn(&A) -> bool,
-{
-    move |input| {
-        if let Ok((rest, parsed)) = parser.parse(input) {
-            if predicate(&parsed) {
-                return Ok((rest, parsed));
+        while let Some(next) = chars.next() {
+            if next.is_alphanumeric() || next == '-' {
+                matched.push(next);
+            } else {
+                break;
             }
         }
-        Err(input)
+
+        let next_idx = matched.len();
+        Ok((&input[next_idx..], matched))
     }
 }
 
-fn one_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<A>>
+struct OneOrMore<P> {
+    parser: P,
+}
+
+impl<P> OneOrMore<P> {
+    fn new(parser: P) -> Self {
+        Self { parser }
+    }
+}
+
+impl<'a, P, T> Parser<'a, Vec<T>> for OneOrMore<P>
 where
-    P: Parser<'a, A>,
+    P: Parser<'a, T>,
 {
-    move |mut input| {
+    fn parse(&self, mut input: &'a str) -> ParseResult<'a, Vec<T>> {
         let mut result = Vec::new();
 
-        let (rest, parsed) = parser.parse(input)?;
+        let (rest, parsed) = self.parser.parse(input)?;
         input = rest;
         result.push(parsed);
 
-        while let Ok((rest, parsed)) = parser.parse(input) {
+        while let Ok((rest, parsed)) = self.parser.parse(input) {
             input = rest;
             result.push(parsed);
         }
@@ -259,14 +326,24 @@ where
     }
 }
 
-fn zero_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<A>>
+struct ZeroOrMore<P> {
+    parser: P,
+}
+
+impl<P> ZeroOrMore<P> {
+    fn new(parser: P) -> Self {
+        Self { parser }
+    }
+}
+
+impl<'a, P, T> Parser<'a, Vec<T>> for ZeroOrMore<P>
 where
-    P: Parser<'a, A>,
+    P: Parser<'a, T>,
 {
-    move |mut input| {
+    fn parse(&self, mut input: &'a str) -> ParseResult<'a, Vec<T>> {
         let mut result = Vec::new();
 
-        while let Ok((rest, parsed)) = parser.parse(input) {
+        while let Ok((rest, parsed)) = self.parser.parse(input) {
             input = rest;
             result.push(parsed);
         }
@@ -275,39 +352,26 @@ where
     }
 }
 
-fn pair<'a, P1, P2, R1, R2>(parser_1: P1, parser_2: P2) -> impl Parser<'a, (R1, R2)>
-where
-    P1: Parser<'a, R1>,
-    P2: Parser<'a, R2>,
-{
-    move |input| {
-        let (rest, parsed_1) = parser_1.parse(input)?;
-        let (rest, parsed_2) = parser_2.parse(rest)?;
-        Ok((rest, (parsed_1, parsed_2)))
+struct Pair<P, Q> {
+    first: P,
+    second: Q,
+}
+
+impl<P, Q> Pair<P, Q> {
+    fn new(first: P, second: Q) -> Self {
+        Self { first, second }
     }
 }
 
-fn map<'a, P, F, A, B>(parser: P, map_fn: F) -> impl Parser<'a, B>
+impl<'a, P, Q, T, U> Parser<'a, (T, U)> for Pair<P, Q>
 where
-    P: Parser<'a, A>,
-    F: Fn(A) -> B,
+    P: Parser<'a, T>,
+    Q: Parser<'a, U>,
 {
-    move |input| {
-        parser
-            .parse(input)
-            .map(|(rest, parsed)| (rest, map_fn(parsed)))
-    }
-}
-
-fn and_then<'a, P, Q, F, A, B>(parser: P, f: F) -> impl Parser<'a, B>
-where
-    P: Parser<'a, A>,
-    Q: Parser<'a, B>,
-    F: Fn(A) -> Q,
-{
-    move |input| {
-        let (rest, parsed) = parser.parse(input)?;
-        f(parsed).parse(rest)
+    fn parse(&self, input: &'a str) -> ParseResult<'a, (T, U)> {
+        let (rest, first) = self.first.parse(input)?;
+        let (rest, second) = self.second.parse(rest)?;
+        Ok((rest, (first, second)))
     }
 }
 
@@ -316,7 +380,7 @@ where
     P1: Parser<'a, R1>,
     P2: Parser<'a, R2>,
 {
-    map(pair(parser_1, parser_2), |(left, _right)| left)
+    Pair::new(parser_1, parser_2).map(|(left, _right)| left)
 }
 
 fn right<'a, P1, P2, R1, R2>(parser_1: P1, parser_2: P2) -> impl Parser<'a, R2>
@@ -324,7 +388,7 @@ where
     P1: Parser<'a, R1>,
     P2: Parser<'a, R2>,
 {
-    map(pair(parser_1, parser_2), |(_left, right)| right)
+    Pair::new(parser_1, parser_2).map(|(_left, right)| right)
 }
 
 fn whitespace_wrap<'a, P, A>(parser: P) -> impl Parser<'a, A>
@@ -350,21 +414,21 @@ fn literal_parser() {
 fn identifier_parser() {
     assert_eq!(
         Ok(("", "i-am-an-identifier".to_string())),
-        identifier("i-am-an-identifier")
+        Identifier.parse("i-am-an-identifier")
     );
     assert_eq!(
         Ok((" entirely an identifier", "not".to_string())),
-        identifier("not entirely an identifier")
+        Identifier.parse("not entirely an identifier")
     );
     assert_eq!(
         Err("!not at all an identifier"),
-        identifier("!not at all an identifier")
+        Identifier.parse("!not at all an identifier")
     );
 }
 
 #[test]
 fn pair_combinator() {
-    let tag_opener = right(match_literal("<"), identifier);
+    let tag_opener = right(match_literal("<"), Identifier);
     assert_eq!(
         Ok(("/>", "my-first-element".to_string())),
         tag_opener.parse("<my-first-element/>")
@@ -375,7 +439,7 @@ fn pair_combinator() {
 
 #[test]
 fn one_or_more_combinator() {
-    let parser = one_or_more(match_literal("ha"));
+    let parser = OneOrMore::new(match_literal("ha"));
     assert_eq!(Ok(("", vec![(), (), ()])), parser.parse("hahaha"));
     assert_eq!(Err("ahah"), parser.parse("ahah"));
     assert_eq!(Err(""), parser.parse(""));
@@ -383,7 +447,7 @@ fn one_or_more_combinator() {
 
 #[test]
 fn zero_or_more_combinator() {
-    let parser = zero_or_more(match_literal("ha"));
+    let parser = ZeroOrMore::new(match_literal("ha"));
     assert_eq!(Ok(("", vec![(), (), ()])), parser.parse("hahaha"));
     assert_eq!(Ok(("ahah", vec![])), parser.parse("ahah"));
     assert_eq!(Ok(("", vec![])), parser.parse(""));
@@ -391,7 +455,7 @@ fn zero_or_more_combinator() {
 
 #[test]
 fn predicate_combinator() {
-    let parser = pred(any_char, |c| *c == 'o');
+    let parser = AnyChar.pred(|c| *c == 'o');
     assert_eq!(Ok(("mg", 'o')), parser.parse("omg"));
     assert_eq!(Err("lol"), parser.parse("lol"));
 }
