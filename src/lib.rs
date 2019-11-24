@@ -18,8 +18,9 @@ impl FromStr for Node {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match element().parse(s) {
-            Ok((_, elm)) => Ok(elm),
-            Err(e) => Err(e.to_string()),
+            Ok(("", elm)) => Ok(elm),
+            Ok((e, _)) => Err(format!("Unable to parse: {}", e)),
+            Err(e) => Err(format!("Unable to parse: {}", e)),
         }
     }
 }
