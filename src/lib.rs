@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,20 +27,19 @@ impl FromStr for Node {
 
 type ParseResult<'a, T> = Result<(&'a str, T), &'a str>;
 
-struct Map<P, T, F> {
+struct Map<P, F> {
     parser: P,
     f: F,
-    marker: PhantomData<T>,
 }
 
-impl<P, F, T, U> Parser for Map<P, T, F>
+impl<P, F, T> Parser for Map<P, F>
 where
-    P: Parser<Output = T>,
-    F: Fn(T) -> U,
+    P: Parser,
+    F: Fn(P::Output) -> T,
 {
-    type Output = U;
+    type Output = T;
 
-    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, U> {
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, Self::Output> {
         self.parser
             .parse(input)
             .map(|(rest, parsed)| (rest, (self.f)(parsed)))
@@ -53,14 +51,14 @@ struct Predicate<P, F> {
     predicate: F,
 }
 
-impl<P, F, T> Parser for Predicate<P, F>
+impl<P, F> Parser for Predicate<P, F>
 where
-    P: Parser<Output = T>,
-    F: Fn(&T) -> bool,
+    P: Parser,
+    F: Fn(&P::Output) -> bool,
 {
-    type Output = T;
+    type Output = P::Output;
 
-    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, T> {
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, Self::Output> {
         if let Ok((rest, parsed)) = self.parser.parse(input) {
             if (self.predicate)(&parsed) {
                 return Ok((rest, parsed));
@@ -70,21 +68,20 @@ where
     }
 }
 
-struct AndThen<P, T, F> {
+struct AndThen<P, F> {
     parser: P,
     f: F,
-    marker: PhantomData<T>,
 }
 
-impl<P, Q, F, T, U> Parser for AndThen<P, T, F>
+impl<P, Q, F> Parser for AndThen<P, F>
 where
-    P: Parser<Output = T>,
-    Q: Parser<Output = U>,
-    F: Fn(T) -> Q,
+    P: Parser,
+    Q: Parser,
+    F: Fn(P::Output) -> Q,
 {
-    type Output = U;
+    type Output = Q::Output;
 
-    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, U> {
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, Self::Output> {
         let (rest, parsed) = self.parser.parse(input)?;
         (self.f)(parsed).parse(rest)
     }
@@ -95,16 +92,12 @@ trait Parser {
 
     fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, Self::Output>;
 
-    fn map<F, U>(self, f: F) -> Map<Self, Self::Output, F>
+    fn map<F, T>(self, f: F) -> Map<Self, F>
     where
         Self: Sized,
-        F: Fn(Self::Output) -> U,
+        F: Fn(Self::Output) -> T,
     {
-        Map {
-            parser: self,
-            f,
-            marker: PhantomData,
-        }
+        Map { parser: self, f }
     }
 
     fn pred<F>(self, predicate: F) -> Predicate<Self, F>
@@ -118,17 +111,13 @@ trait Parser {
         }
     }
 
-    fn and_then<P, F, U>(self, f: F) -> AndThen<Self, Self::Output, F>
+    fn and_then<P, F>(self, f: F) -> AndThen<Self, F>
     where
         Self: Sized,
         F: Fn(Self::Output) -> P,
-        P: Parser<Output = U>,
+        P: Parser,
     {
-        AndThen {
-            parser: self,
-            f,
-            marker: PhantomData,
-        }
+        AndThen { parser: self, f }
     }
 }
 
@@ -143,14 +132,14 @@ impl<P, Q> Either<P, Q> {
     }
 }
 
-impl<P, Q, T> Parser for Either<P, Q>
+impl<P, Q> Parser for Either<P, Q>
 where
-    P: Parser<Output = T>,
-    Q: Parser<Output = T>,
+    P: Parser,
+    Q: Parser<Output = P::Output>,
 {
-    type Output = T;
+    type Output = P::Output;
 
-    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, T> {
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, Self::Output> {
         self.first
             .parse(input)
             .or_else(|_| self.second.parse(input))
@@ -349,13 +338,10 @@ impl<P> OneOrMore<P> {
     }
 }
 
-impl<P, T> Parser for OneOrMore<P>
-where
-    P: Parser<Output = T>,
-{
-    type Output = Vec<T>;
+impl<P: Parser> Parser for OneOrMore<P> {
+    type Output = Vec<P::Output>;
 
-    fn parse<'a>(&self, mut input: &'a str) -> ParseResult<'a, Vec<T>> {
+    fn parse<'a>(&self, mut input: &'a str) -> ParseResult<'a, Self::Output> {
         let mut result = Vec::new();
 
         let (rest, parsed) = self.parser.parse(input)?;
@@ -381,13 +367,10 @@ impl<P> ZeroOrMore<P> {
     }
 }
 
-impl<P, T> Parser for ZeroOrMore<P>
-where
-    P: Parser<Output = T>,
-{
-    type Output = Vec<T>;
+impl<P: Parser> Parser for ZeroOrMore<P> {
+    type Output = Vec<P::Output>;
 
-    fn parse<'a>(&self, mut input: &'a str) -> ParseResult<'a, Vec<T>> {
+    fn parse<'a>(&self, mut input: &'a str) -> ParseResult<'a, Self::Output> {
         let mut result = Vec::new();
 
         while let Ok((rest, parsed)) = self.parser.parse(input) {
@@ -410,14 +393,14 @@ impl<P, Q> Pair<P, Q> {
     }
 }
 
-impl<P, Q, T, U> Parser for Pair<P, Q>
+impl<P, Q> Parser for Pair<P, Q>
 where
-    P: Parser<Output = T>,
-    Q: Parser<Output = U>,
+    P: Parser,
+    Q: Parser,
 {
-    type Output = (T, U);
+    type Output = (P::Output, Q::Output);
 
-    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, (T, U)> {
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, Self::Output> {
         let (rest, first) = self.first.parse(input)?;
         let (rest, second) = self.second.parse(rest)?;
         Ok((rest, (first, second)))
