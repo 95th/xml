@@ -161,11 +161,18 @@ fn space1<'a>() -> impl Parser<'a, Vec<char>> {
     one_or_more(whitespace_char())
 }
 
+fn escaped_char<'a>(quote: char) -> impl Parser<'a, char> {
+    match_char('\\').and_then(move |_| either(match_char(quote), match_char('\\')))
+}
+
 fn quoted_string<'a>() -> impl Parser<'a, String> {
     either(match_char('"'), match_char('\''))
         .and_then(|opening_char| {
             left(
-                zero_or_more(any_char.pred(move |c| *c != opening_char)),
+                zero_or_more(either(
+                    escaped_char(opening_char),
+                    any_char.pred(move |c| *c != opening_char && *c != '\\'),
+                )),
                 match_char(opening_char),
             )
         })
@@ -499,4 +506,43 @@ fn mismatched_quoted_string() {
 
     let doc = r#"<top foo='hello"/>"#;
     assert_eq!(Err(r#"foo='hello"/>"#), element().parse(doc));
+}
+
+#[test]
+fn escaped_quoted_string_01() {
+    let doc = r#"<top foo="hel\"lo"/>"#;
+    let parsed_doc = Element {
+        name: "top".to_string(),
+        attrs: vec![("foo".to_string(), r#"hel"lo"#.to_string())],
+        children: vec![],
+    };
+    assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
+}
+
+#[test]
+fn escaped_quoted_string_02() {
+    let doc = r#"<top foo='hel\'lo'/>"#;
+    let parsed_doc = Element {
+        name: "top".to_string(),
+        attrs: vec![("foo".to_string(), r#"hel'lo"#.to_string())],
+        children: vec![],
+    };
+    assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
+}
+
+#[test]
+fn invalid_escaped_quoted_string() {
+    let doc = r#"<top foo='hel\lo'/>"#;
+    assert_eq!(Err(r#"foo='hel\lo'/>"#), element().parse(doc));
+}
+
+#[test]
+fn escaped_backslash_quoted_string() {
+    let doc = r#"<top foo='hel\\lo'/>"#;
+    let parsed_doc = Element {
+        name: "top".to_string(),
+        attrs: vec![("foo".to_string(), r#"hel\lo"#.to_string())],
+        children: vec![],
+    };
+    assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
 }
