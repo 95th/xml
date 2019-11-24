@@ -145,6 +145,10 @@ fn any_char(input: &str) -> ParseResult<char> {
     }
 }
 
+fn match_char<'a>(expected: char) -> impl Parser<'a, char> {
+    pred(any_char, move |c| *c == expected)
+}
+
 fn whitespace_char<'a>() -> impl Parser<'a, char> {
     pred(any_char, |c| c.is_whitespace())
 }
@@ -158,14 +162,14 @@ fn space1<'a>() -> impl Parser<'a, Vec<char>> {
 }
 
 fn quoted_string<'a>() -> impl Parser<'a, String> {
-    right(
-        match_literal("\""),
-        left(
-            zero_or_more(any_char.pred(|c| *c != '"')),
-            match_literal("\""),
-        ),
-    )
-    .map(|chars| chars.into_iter().collect())
+    either(match_char('"'), match_char('\''))
+        .and_then(|opening_char| {
+            left(
+                zero_or_more(any_char.pred(move |c| *c != opening_char)),
+                match_char(opening_char),
+            )
+        })
+        .map(|chars| chars.into_iter().collect())
 }
 
 fn identifier(input: &str) -> ParseResult<String> {
@@ -456,4 +460,43 @@ fn mismatched_closing_tag() {
             <bottom/>
         </middle>"#;
     assert_eq!(Err("</middle>"), element().parse(doc));
+}
+
+#[test]
+fn single_quoted_string() {
+    let doc = r#"<top foo='hello'/>"#;
+    let parsed_doc = Element {
+        name: "top".to_string(),
+        attrs: vec![("foo".to_string(), "hello".to_string())],
+        children: vec![],
+    };
+    assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
+}
+
+#[test]
+fn mixed_quoted_string() {
+    let doc = r#"<top foo="hello' bar='world"/>"#;
+    let parsed_doc = Element {
+        name: "top".to_string(),
+        attrs: vec![("foo".to_string(), "hello' bar='world".to_string())],
+        children: vec![],
+    };
+    assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
+
+    let doc = r#"<top foo='hello" bar="world'/>"#;
+    let parsed_doc = Element {
+        name: "top".to_string(),
+        attrs: vec![("foo".to_string(), r#"hello" bar="world"#.to_string())],
+        children: vec![],
+    };
+    assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
+}
+
+#[test]
+fn mismatched_quoted_string() {
+    let doc = r#"<top foo="hello'/>"#;
+    assert_eq!(Err(r#"foo="hello'/>"#), element().parse(doc));
+
+    let doc = r#"<top foo='hello"/>"#;
+    assert_eq!(Err(r#"foo='hello"/>"#), element().parse(doc));
 }
