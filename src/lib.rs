@@ -35,25 +35,12 @@ impl FromStr for Node {
     }
 }
 
-struct ElementParser {
-    parser: Box<dyn Parser<Output = Node>>,
-}
-
-impl Parser for ElementParser {
-    type Output = Node;
-
-    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, Node> {
-        self.parser.parse(input)
-    }
-}
-
-fn element() -> ElementParser {
-    ElementParser {
-        parser: Box::new(whitespace_wrap(either(
-            single_element(),
-            either(parent_element(), text_node()),
-        ))),
-    }
+fn element() -> impl Parser<Output = Node> {
+    whitespace_wrap(either(
+        single_element(),
+        either(parent_element(), text_node()),
+    ))
+    .boxed()
 }
 
 fn text_node() -> impl Parser<Output = Node> {

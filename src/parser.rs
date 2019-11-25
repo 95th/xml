@@ -57,6 +57,13 @@ pub trait Parser {
     {
         OneOrMore { parser: self }
     }
+
+    fn boxed(self) -> BoxedParser<Self::Output>
+    where
+        Self: 'static + Sized,
+    {
+        BoxedParser(Box::new(self))
+    }
 }
 
 pub struct Map<P, F> {
@@ -217,4 +224,14 @@ where
     Q: Parser,
 {
     first.zip(second).map(|(_, output)| output)
+}
+
+pub struct BoxedParser<T>(Box<dyn Parser<Output = T>>);
+
+impl<T> Parser for BoxedParser<T> {
+    type Output = T;
+
+    fn parse<'a>(&self, input: &'a str) -> ParseResult<'a, Self::Output> {
+        self.0.parse(input)
+    }
 }
