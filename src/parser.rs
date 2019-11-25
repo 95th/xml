@@ -202,3 +202,19 @@ impl<P: Parser> Parser for OneOrMore<P> {
         Ok((input, result))
     }
 }
+
+pub fn first<P, Q>(first: P, second: Q) -> impl Parser<Output = P::Output>
+where
+    P: Parser,
+    Q: Parser,
+{
+    first.zip(second).map(|(output, _)| output)
+}
+
+pub fn second<P, Q>(first: P, second: Q) -> impl Parser<Output = Q::Output>
+where
+    P: Parser,
+    Q: Parser,
+{
+    first.zip(second).map(|(_, output)| output)
+}

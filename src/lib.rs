@@ -127,22 +127,6 @@ fn quoted_string() -> impl Parser<Output = String> {
         .map(|chars| chars.into_iter().collect())
 }
 
-fn first<P, Q>(first: P, second: Q) -> impl Parser<Output = P::Output>
-where
-    P: Parser,
-    Q: Parser,
-{
-    first.zip(second).map(|(output, _)| output)
-}
-
-fn second<P, Q>(first: P, second: Q) -> impl Parser<Output = Q::Output>
-where
-    P: Parser,
-    Q: Parser,
-{
-    first.zip(second).map(|(_, output)| output)
-}
-
 fn whitespace_wrap<P: Parser>(parser: P) -> impl Parser<Output = P::Output> {
     second(any_space(), first(parser, any_space()))
 }
