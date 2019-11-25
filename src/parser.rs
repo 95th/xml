@@ -108,8 +108,8 @@ pub struct AndThen<P, F> {
 impl<P, Q, F> Parser for AndThen<P, F>
 where
     P: Parser,
-    Q: Parser,
     F: Fn(P::Output) -> Q,
+    Q: Parser,
 {
     type Output = Q::Output;
 

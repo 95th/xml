@@ -74,7 +74,7 @@ fn parent_element() -> impl Parser<Output = Node> {
 }
 
 fn single_element() -> impl Parser<Output = Node> {
-    first(element_start(), space0().zip(literal("/>"))).map(|(name, attrs)| {
+    first(element_start(), any_space().zip(literal("/>"))).map(|(name, attrs)| {
         Node::Element(Element {
             name,
             attrs,
@@ -84,7 +84,7 @@ fn single_element() -> impl Parser<Output = Node> {
 }
 
 fn open_element() -> impl Parser<Output = Element> {
-    first(element_start(), space0().zip(literal(">"))).map(|(name, attrs)| Element {
+    first(element_start(), any_space().zip(literal(">"))).map(|(name, attrs)| Element {
         name,
         attrs,
         children: vec![],
@@ -101,7 +101,7 @@ fn element_start() -> impl Parser<Output = (String, Vec<(String, String)>)> {
 }
 
 fn attributes() -> impl Parser<Output = Vec<(String, String)>> {
-    second(space1(), attribute_pair()).zero_or_more()
+    second(one_or_more_space(), attribute_pair()).zero_or_more()
 }
 
 fn attribute_pair() -> impl Parser<Output = (String, String)> {
@@ -144,7 +144,7 @@ where
 }
 
 fn whitespace_wrap<P: Parser>(parser: P) -> impl Parser<Output = P::Output> {
-    second(space0(), first(parser, space0()))
+    second(any_space(), first(parser, any_space()))
 }
 
 #[test]
