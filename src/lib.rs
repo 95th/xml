@@ -73,8 +73,9 @@ fn single_element() -> impl Parser<Output = Node> {
 
 fn open_element() -> impl Parser<Output = Element> {
     element_start()
-        .zip(any_space().zip(literal(">")))
-        .map(|((name, attrs), _)| Element {
+        .zip(any_space())
+        .zip(literal(">"))
+        .map(|(((name, attrs), _), _)| Element {
             name,
             attrs,
             children: vec![],
