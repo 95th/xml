@@ -36,7 +36,7 @@ pub trait Parser {
     fn or<P>(self, other: P) -> Or<Self, P>
     where
         Self: Sized,
-        P: Parser,
+        P: Parser<Output = Self::Output>,
     {
         Or {
             first: self,
