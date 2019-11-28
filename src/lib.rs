@@ -6,7 +6,7 @@ mod parser;
 use chars::*;
 use ident::identifier;
 use lit::literal;
-use parser::*;
+use parser::Parser;
 
 use std::str::FromStr;
 
@@ -35,11 +35,7 @@ impl FromStr for Node {
 }
 
 fn element() -> impl Parser<Output = Node> {
-    whitespace_wrap(either(
-        single_element(),
-        either(parent_element(), text_node()),
-    ))
-    .boxed()
+    whitespace_wrap(single_element().or(parent_element()).or(text_node())).boxed()
 }
 
 fn text_node() -> impl Parser<Output = Node> {
@@ -51,70 +47,90 @@ fn text_node() -> impl Parser<Output = Node> {
 
 fn parent_element() -> impl Parser<Output = Node> {
     open_element().and_then(|el| {
-        first(element().zero_or_more(), close_element(el.name.clone())).map(move |children| {
-            let mut el = el.clone();
-            el.children = children;
-            Node::Element(el)
-        })
+        element()
+            .zero_or_more()
+            .zip(close_element(el.name.clone()))
+            .map(move |(children, _)| {
+                let mut el = el.clone();
+                el.children = children;
+                Node::Element(el)
+            })
     })
 }
 
 fn single_element() -> impl Parser<Output = Node> {
-    first(element_start(), any_space().zip(literal("/>"))).map(|(name, attrs)| {
-        Node::Element(Element {
+    element_start()
+        .zip(any_space())
+        .zip(literal("/>"))
+        .map(|(((name, attrs), _), _)| {
+            Node::Element(Element {
+                name,
+                attrs,
+                children: vec![],
+            })
+        })
+}
+
+fn open_element() -> impl Parser<Output = Element> {
+    element_start()
+        .zip(any_space().zip(literal(">")))
+        .map(|((name, attrs), _)| Element {
             name,
             attrs,
             children: vec![],
         })
-    })
-}
-
-fn open_element() -> impl Parser<Output = Element> {
-    first(element_start(), any_space().zip(literal(">"))).map(|(name, attrs)| Element {
-        name,
-        attrs,
-        children: vec![],
-    })
 }
 
 fn close_element(expected_name: String) -> impl Parser<Output = String> {
-    second(literal("</"), first(identifier(), literal(">")))
+    literal("</")
+        .zip(identifier())
+        .zip(literal(">"))
+        .map(|((_, ident), _)| ident)
         .pred(move |name| name == &expected_name)
 }
 
 fn element_start() -> impl Parser<Output = (String, Vec<(String, String)>)> {
-    second(literal("<"), identifier().zip(attributes()))
+    literal("<")
+        .zip(identifier())
+        .zip(attributes())
+        .map(|((_, ident), attrs)| (ident, attrs))
 }
 
 fn attributes() -> impl Parser<Output = Vec<(String, String)>> {
-    second(one_or_more_space(), attribute_pair()).zero_or_more()
+    one_or_more_space()
+        .zip(attribute_pair())
+        .map(|(_, attr)| attr)
+        .zero_or_more()
 }
 
 fn attribute_pair() -> impl Parser<Output = (String, String)> {
-    identifier().zip(second(literal("="), quoted_string()))
+    identifier()
+        .zip(literal("="))
+        .zip(quoted_string())
+        .map(|((ident, _), string)| (ident, string))
 }
 
 fn escaped_char(quote: char) -> impl Parser<Output = char> {
-    match_char('\\').and_then(move |_| either(match_char(quote), match_char('\\')))
+    match_char('\\').and_then(move |_| match_char(quote).or(match_char('\\')))
 }
 
 fn quoted_string() -> impl Parser<Output = String> {
-    either(match_char('"'), match_char('\''))
+    match_char('"')
+        .or(match_char('\''))
         .and_then(|opening_char| {
-            first(
-                either(
-                    escaped_char(opening_char),
-                    any_char().pred(move |c| *c != opening_char && *c != '\\'),
-                )
-                .zero_or_more(),
-                match_char(opening_char),
-            )
+            escaped_char(opening_char)
+                .or(any_char().pred(move |c| *c != opening_char && *c != '\\'))
+                .zero_or_more()
+                .zip(match_char(opening_char))
         })
-        .map(|chars| chars.into_iter().collect())
+        .map(|(chars, _)| chars.into_iter().collect())
 }
 
 fn whitespace_wrap<P: Parser>(parser: P) -> impl Parser<Output = P::Output> {
-    second(any_space(), first(parser, any_space()))
+    any_space()
+        .zip(parser)
+        .zip(any_space())
+        .map(|((_, output), _)| output)
 }
 
 #[test]
@@ -147,7 +163,7 @@ fn identifier_parser() {
 
 #[test]
 fn pair_combinator() {
-    let tag_opener = second(literal("<"), identifier());
+    let tag_opener = literal("<").zip(identifier()).map(|(_, ident)| ident);
     assert_eq!(
         Ok(("/>", "my-first-element".to_string())),
         tag_opener.parse("<my-first-element/>")

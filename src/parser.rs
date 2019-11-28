@@ -33,6 +33,17 @@ pub trait Parser {
         AndThen { parser: self, f }
     }
 
+    fn or<P>(self, other: P) -> Or<Self, P>
+    where
+        Self: Sized,
+        P: Parser,
+    {
+        Or {
+            first: self,
+            second: other,
+        }
+    }
+
     fn zip<P>(self, other: P) -> Zip<Self, P>
     where
         Self: Sized,
@@ -145,16 +156,12 @@ where
     }
 }
 
-pub struct Either<P, Q> {
+pub struct Or<P, Q> {
     first: P,
     second: Q,
 }
 
-pub fn either<P, Q>(first: P, second: Q) -> Either<P, Q> {
-    Either { first, second }
-}
-
-impl<P, Q> Parser for Either<P, Q>
+impl<P, Q> Parser for Or<P, Q>
 where
     P: Parser,
     Q: Parser<Output = P::Output>,
@@ -208,22 +215,6 @@ impl<P: Parser> Parser for OneOrMore<P> {
 
         Ok((input, result))
     }
-}
-
-pub fn first<P, Q>(first: P, second: Q) -> impl Parser<Output = P::Output>
-where
-    P: Parser,
-    Q: Parser,
-{
-    first.zip(second).map(|(output, _)| output)
-}
-
-pub fn second<P, Q>(first: P, second: Q) -> impl Parser<Output = Q::Output>
-where
-    P: Parser,
-    Q: Parser,
-{
-    first.zip(second).map(|(_, output)| output)
 }
 
 pub struct BoxedParser<T>(Box<dyn Parser<Output = T>>);
